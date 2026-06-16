@@ -581,18 +581,23 @@ function sheetUrl(sheetName) {
 // ── Parse the gviz JSON response ────────────────────────
 function parseGviz(text) {
   // Strip the google.visualization.Query.setResponse( ... ) wrapper
-  const json = text.replace(/^[^(]+\(/, "").replace(/\);?\s*$/, "");
+  const json = text.replace(/^[^\(]+\(/, "").replace(/\);\s*$/, "");
   const obj  = JSON.parse(json);
-  if (!obj.table || !obj.table.rows) return [];
+  if (!obj.table) return [];
 
-  const headers = obj.table.cols.map(c => (c.label || "").trim());
-  return obj.table.rows.map(row => {
+  const cols = obj.table.cols || [];
+  const rows = obj.table.rows || [];
+  const headers = cols.map(c => (c.label || "").trim());
+
+  return rows.map(row => {
     const r = {};
-    row.c.forEach((cell, i) => {
-      r[headers[i]] = cell && cell.v != null ? String(cell.v).trim() : "";
+    (row.c || []).forEach((cell, i) => {
+      // Use formatted value (f) for dates, raw value (v) for everything else
+      const val = cell ? (cell.f != null ? cell.f : (cell.v != null ? cell.v : "")) : "";
+      r[headers[i]] = String(val).trim();
     });
     return r;
-  }).filter(r => Object.values(r).some(v => v)); // skip blank rows
+  }); // keep all rows including those with date-only values
 }
 
 // ── Fetch one sheet ──────────────────────────────────────
@@ -627,9 +632,14 @@ async function loadAllData(showFeedback = false) {
     DATA.exams     = exams;
     DATA.personnel = personnel;
 
-    // Count members from updates sheet (or could fetch members sheet separately)
-    const memberRows = await fetchSheet(CFG.SHEETS.MEMBERS).catch(() => []);
-    DATA.members = memberRows.length;
+    // Count members directly from raw gviz row count (avoids date parsing issues)
+    try {
+      const memberRes  = await fetch(sheetUrl(CFG.SHEETS.MEMBERS));
+      const memberText = await memberRes.text();
+      const memberJson = memberText.replace(/^[^\(]+\(/, "").replace(/\);\s*$/, "");
+      const memberObj  = JSON.parse(memberJson);
+      DATA.members = (memberObj.table && memberObj.table.rows) ? memberObj.table.rows.length : 0;
+    } catch(_) { DATA.members = 0; }
 
     renderCurrentPage();
     updateBadges();
