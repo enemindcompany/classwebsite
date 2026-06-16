@@ -195,34 +195,22 @@
 </head>
 <body>
 
-<!-- ════════════════════════════════════════════════════════
-     CONFIGURATION — Edit this block before deploying
-     ════════════════════════════════════════════════════════
-  HOW TO GET YOUR SHEET JSON URL:
-  1. Open your Google Sheet
-  2. File → Share → Publish to web → choose "Entire Document" + "JSON"
-     (or publish each sheet individually)
-  3. The URL looks like:
-     https://docs.google.com/spreadsheets/d/SHEET_ID/gviz/tq?tqx=out:json&sheet=SHEET_NAME
-  Replace SHEET_ID with your actual spreadsheet ID.
-  ════════════════════════════════════════════════════════ -->
 <script>
 const SITE_CONFIG = {
   // ── REQUIRED: Replace with your Google Spreadsheet ID ──────────────────
-  // Found in the URL: docs.google.com/spreadsheets/d/THIS_PART/edit
-  SHEET_ID: "YOUR_SPREADSHEET_ID_HERE",
+  SHEET_ID: "1M4gvxqADxLYVHZHl29-8TfC55-jzDIOenb0z3-A5l_w",
 
   // ── Sheet tab names (must match exactly in your Google Sheet) ──────────
   SHEETS: {
-    UPDATES:   "Admin Updates",   // Your broadcast/content tab
-    TIMETABLE: "Timetable",       // New tab you'll create
-    EXAMS:     "Exams",           // New tab you'll create
-    PERSONNEL: "Personnel",       // New tab you'll create
-    MEMBERS:   "third",           // Your form responses tab
+    UPDATES:   "Admin Updates",
+    TIMETABLE: "Timetable",
+    EXAMS:     "Exams",
+    PERSONNEL: "Personnel",
+    MEMBERS:   "third",
   },
 
   // ── Admin password (same as in your Apps Script CONFIG) ───────────────
-  ADMIN_PASSWORD: "YourAdminPassword123",
+  ADMIN_PASSWORD: "123",
 
   // ── Class display name ─────────────────────────────────────────────────
   CLASS_NAME: "Class of 2025",
@@ -543,10 +531,8 @@ const SITE_CONFIG = {
 //  DATA LAYER — reads from Google Sheets published JSON
 // ═══════════════════════════════════════════════════════════
 
-// Runtime config (merged from SITE_CONFIG + localStorage overrides)
 let CFG = Object.assign({}, SITE_CONFIG);
 
-// In-memory data cache
 let DATA = {
   updates: [],
   timetable: [],
@@ -557,61 +543,78 @@ let DATA = {
 
 // ── Persist overrides in localStorage ───────────────────
 function persistLoad() {
-  const s = localStorage.getItem("classPortalSettings");
-  if (s) {
-    const p = JSON.parse(s);
-    if (p.CLASS_NAME)    CFG.CLASS_NAME    = p.CLASS_NAME;
-    if (p.REG_FORM_URL)  CFG.REG_FORM_URL  = p.REG_FORM_URL;
-    if (p.SHEET_ID)      CFG.SHEET_ID      = p.SHEET_ID;
-  }
+  try {
+    const s = localStorage.getItem("classPortalSettings");
+    if (s) {
+      const p = JSON.parse(s);
+      if (p.CLASS_NAME)   CFG.CLASS_NAME   = p.CLASS_NAME;
+      if (p.REG_FORM_URL) CFG.REG_FORM_URL = p.REG_FORM_URL;
+      if (p.SHEET_ID)     CFG.SHEET_ID     = p.SHEET_ID;
+    }
+  } catch(_) {}
 }
 function persistSave() {
-  localStorage.setItem("classPortalSettings", JSON.stringify({
-    CLASS_NAME:   CFG.CLASS_NAME,
-    REG_FORM_URL: CFG.REG_FORM_URL,
-    SHEET_ID:     CFG.SHEET_ID,
-  }));
+  try {
+    localStorage.setItem("classPortalSettings", JSON.stringify({
+      CLASS_NAME:   CFG.CLASS_NAME,
+      REG_FORM_URL: CFG.REG_FORM_URL,
+      SHEET_ID:     CFG.SHEET_ID,
+    }));
+  } catch(_) {}
 }
 
 // ── Build Google Sheets JSON URL ─────────────────────────
 function sheetUrl(sheetName) {
   const bust = Date.now();
-  return `https://docs.google.com/spreadsheets/d/${CFG.SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}&_=${bust}`;
+  return "https://docs.google.com/spreadsheets/d/" + CFG.SHEET_ID +
+         "/gviz/tq?tqx=out:json&sheet=" + encodeURIComponent(sheetName) + "&_=" + bust;
 }
 
-// ── Parse the gviz JSON response ────────────────────────
+// ── Parse the gviz JSON response (FIXED for parsedNumHeaders=0) ─────────
 function parseGviz(text) {
-  // Strip the google.visualization.Query.setResponse( ... ) wrapper
   const json = text.replace(/^[^\(]+\(/, "").replace(/\);\s*$/, "");
   const obj  = JSON.parse(json);
   if (!obj.table) return [];
 
-  const cols = obj.table.cols || [];
   const rows = obj.table.rows || [];
-  const headers = cols.map(c => (c.label || "").trim());
+  if (!rows.length) return [];
 
-  return rows.map(row => {
+  // When parsedNumHeaders=0 Google puts the header row as a data row
+  // Detect this: if col labels are all empty/A/B/C, use first data row as headers
+  const colLabels = (obj.table.cols || []).map(c => (c.label || "").trim());
+  const hasRealLabels = colLabels.some(l => l !== "" && !/^[A-Z]$/.test(l));
+
+  let headers, dataRows;
+  if (hasRealLabels) {
+    headers  = colLabels;
+    dataRows = rows;
+  } else {
+    // First row is actually the header row
+    headers  = (rows[0].c || []).map(cell => cell ? String(cell.v || "").trim() : "");
+    dataRows = rows.slice(1);
+  }
+
+  return dataRows.map(function(row) {
     const r = {};
-    (row.c || []).forEach((cell, i) => {
-      // Use formatted value (f) for dates, raw value (v) for everything else
+    (row.c || []).forEach(function(cell, i) {
       const val = cell ? (cell.f != null ? cell.f : (cell.v != null ? cell.v : "")) : "";
       r[headers[i]] = String(val).trim();
     });
     return r;
-  }); // keep all rows including those with date-only values
+  });
 }
 
 // ── Fetch one sheet ──────────────────────────────────────
 async function fetchSheet(sheetName) {
   const url = sheetUrl(sheetName);
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`HTTP ${res.status} for sheet "${sheetName}"`);
+  if (!res.ok) throw new Error("HTTP " + res.status + " for sheet \"" + sheetName + "\"");
   const text = await res.text();
   return parseGviz(text);
 }
 
 // ── Load all sheets ──────────────────────────────────────
-async function loadAllData(showFeedback = false) {
+async function loadAllData(showFeedback) {
   if (CFG.SHEET_ID === "YOUR_SPREADSHEET_ID_HERE" || !CFG.SHEET_ID) {
     renderNotConnected();
     return;
@@ -622,10 +625,10 @@ async function loadAllData(showFeedback = false) {
 
   try {
     const [updates, timetable, exams, personnel] = await Promise.all([
-      fetchSheet(CFG.SHEETS.UPDATES).catch(() => []),
-      fetchSheet(CFG.SHEETS.TIMETABLE).catch(() => []),
-      fetchSheet(CFG.SHEETS.EXAMS).catch(() => []),
-      fetchSheet(CFG.SHEETS.PERSONNEL).catch(() => []),
+      fetchSheet(CFG.SHEETS.UPDATES).catch(function() { return []; }),
+      fetchSheet(CFG.SHEETS.TIMETABLE).catch(function() { return []; }),
+      fetchSheet(CFG.SHEETS.EXAMS).catch(function() { return []; }),
+      fetchSheet(CFG.SHEETS.PERSONNEL).catch(function() { return []; }),
     ]);
 
     DATA.updates   = updates;
@@ -633,13 +636,16 @@ async function loadAllData(showFeedback = false) {
     DATA.exams     = exams;
     DATA.personnel = personnel;
 
-    // Count members directly from raw gviz row count (avoids date parsing issues)
+    // Count members
     try {
       const memberRes  = await fetch(sheetUrl(CFG.SHEETS.MEMBERS));
       const memberText = await memberRes.text();
       const memberJson = memberText.replace(/^[^\(]+\(/, "").replace(/\);\s*$/, "");
       const memberObj  = JSON.parse(memberJson);
-      DATA.members = (memberObj.table && memberObj.table.rows) ? memberObj.table.rows.length : 0;
+      // Subtract 1 for the header row if parsedNumHeaders=0
+      const rawCount = (memberObj.table && memberObj.table.rows) ? memberObj.table.rows.length : 0;
+      const parsed   = memberObj.table ? (memberObj.table.parsedNumHeaders || 0) : 0;
+      DATA.members   = parsed === 0 && rawCount > 0 ? rawCount - 1 : rawCount;
     } catch(_) { DATA.members = 0; }
 
     renderCurrentPage();
@@ -648,30 +654,25 @@ async function loadAllData(showFeedback = false) {
     if (showFeedback) showDataStatus("✅ Data refreshed from Google Sheets.", "success");
   } catch (err) {
     st.textContent = "Refresh failed";
-    if (showFeedback) showDataStatus("❌ Could not load data: " + err.message + ". Make sure your Sheet ID is correct and the sheet is published to web.", "error");
+    if (showFeedback) showDataStatus("❌ Could not load data: " + err.message, "error");
     console.error(err);
   }
 }
 
 function showDataStatus(msg, type) {
   const el = document.getElementById("admin-data-status");
-  if (el) el.innerHTML = `<div class="alert alert-${type === "success" ? "success" : "error"}">${msg}</div>`;
+  if (el) el.innerHTML = "<div class=\"alert alert-" + (type === "success" ? "success" : "error") + "\">" + msg + "</div>";
 }
 
 function renderNotConnected() {
-  const msg = `
-    <div class="card" style="text-align:center; padding:40px;">
-      <div style="font-size:40px; margin-bottom:12px;">🔗</div>
-      <div class="card-title" style="font-size:18px; margin-bottom:8px;">Connect your Google Sheet</div>
-      <div class="card-body">Go to <strong>Admin Panel</strong>, log in, and paste your Google Sheet ID to start displaying live data.</div>
-    </div>`;
-  ["home-recent","list-announcements","list-assignments","list-documents","list-sports","list-academic","list-gallery","list-personnel"].forEach(id => {
+  const msg = "<div class=\"card\" style=\"text-align:center; padding:40px;\"><div style=\"font-size:40px; margin-bottom:12px;\">🔗</div><div class=\"card-title\" style=\"font-size:18px; margin-bottom:8px;\">Connect your Google Sheet</div><div class=\"card-body\">Go to <strong>Admin Panel</strong>, log in, and paste your Google Sheet ID to start displaying live data.</div></div>";
+  ["home-recent","list-announcements","list-assignments","list-documents","list-sports","list-academic","list-gallery","list-personnel"].forEach(function(id) {
     const el = document.getElementById(id);
     if (el) el.innerHTML = msg;
   });
-  ["timetable-body","exam-body"].forEach(id => {
+  ["timetable-body","exam-body"].forEach(function(id) {
     const el = document.getElementById(id);
-    if (el) el.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--muted); padding:32px;">Connect your Google Sheet to see data here.</td></tr>`;
+    if (el) el.innerHTML = "<tr><td colspan=\"6\" style=\"text-align:center; color:var(--muted); padding:32px;\">Connect your Google Sheet to see data here.</td></tr>";
   });
 }
 
@@ -683,11 +684,11 @@ let currentPage = "home";
 
 function go(page) {
   currentPage = page;
-  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
-  document.querySelectorAll(".nav-item").forEach(n => n.classList.remove("active"));
+  document.querySelectorAll(".page").forEach(function(p) { p.classList.remove("active"); });
+  document.querySelectorAll(".nav-item").forEach(function(n) { n.classList.remove("active"); });
   document.getElementById("page-" + page).classList.add("active");
-  document.querySelectorAll(".nav-item").forEach(n => {
-    if (n.getAttribute("onclick") === `go('${page}')`) n.classList.add("active");
+  document.querySelectorAll(".nav-item").forEach(function(n) {
+    if (n.getAttribute("onclick") === "go('" + page + "')") n.classList.add("active");
   });
   renderCurrentPage();
 }
@@ -712,16 +713,16 @@ function renderCurrentPage() {
 // ═══════════════════════════════════════════════════════════
 
 const BADGE_MAP = {
-  "Announcement": "badge-blue",
-  "Assignment":   "badge-amber",
-  "Timetable":    "badge-green",
-  "Exam Timetable": "badge-red",
-  "Document":     "badge-gray",
-  "Sports":       "badge-purple",
-  "Personnel":    "badge-teal",
-  "Academic Support": "badge-green",
-  "Gallery":      "badge-gray",
-  "Other":        "badge-blue",
+  "Announcement":    "badge-blue",
+  "Assignment":      "badge-amber",
+  "Timetable":       "badge-green",
+  "Exam Timetable":  "badge-red",
+  "Document":        "badge-gray",
+  "Sports":          "badge-purple",
+  "Personnel":       "badge-teal",
+  "Academic Support":"badge-green",
+  "Gallery":         "badge-gray",
+  "Other":           "badge-blue",
 };
 
 function cardHTML(row) {
@@ -730,41 +731,39 @@ function cardHTML(row) {
   const body     = row["Message"]  || row["message"]  || row["Body"] || "";
   const link     = row["Link (optional)"] || row["Link"] || row["link"] || "";
   const badge    = BADGE_MAP[category] || "badge-gray";
-  return `
-    <div class="card">
-      <span class="badge ${badge}">${category}</span>
-      <div class="card-title">${escHtml(title)}</div>
-      <div class="card-body">${escHtml(body)}</div>
-      ${link ? `<a href="${escHtml(link)}" target="_blank" class="btn btn-outline" style="margin-top:12px; font-size:13px;">🔗 Open Link</a>` : ""}
-    </div>`;
+  return "<div class=\"card\"><span class=\"badge " + badge + "\">" + escHtml(category) + "</span>" +
+    "<div class=\"card-title\">" + escHtml(title) + "</div>" +
+    "<div class=\"card-body\">" + escHtml(body) + "</div>" +
+    (link ? "<a href=\"" + escHtml(link) + "\" target=\"_blank\" class=\"btn btn-outline\" style=\"margin-top:12px; font-size:13px;\">🔗 Open Link</a>" : "") +
+    "</div>";
 }
 
 function renderHome() {
   document.getElementById("home-title").textContent = "Welcome to " + CFG.CLASS_NAME + " 🎓";
   document.getElementById("nav-logo").textContent   = "🎓 " + CFG.CLASS_NAME;
 
-  const ann = DATA.updates.filter(r => r["Category"] === "Announcement" || r["Category"] === "Other");
-  const asg = DATA.updates.filter(r => r["Category"] === "Assignment");
-  const doc = DATA.updates.filter(r => r["Category"] === "Document");
+  const ann = DATA.updates.filter(function(r) { return r["Category"] === "Announcement" || r["Category"] === "Other"; });
+  const asg = DATA.updates.filter(function(r) { return r["Category"] === "Assignment"; });
+  const doc = DATA.updates.filter(function(r) { return r["Category"] === "Document"; });
 
-  document.getElementById("stat-members").textContent       = DATA.members || "–";
-  document.getElementById("stat-announcements").textContent  = ann.length;
-  document.getElementById("stat-assignments").textContent    = asg.length;
-  document.getElementById("stat-docs").textContent          = doc.length;
+  document.getElementById("stat-members").textContent      = DATA.members || "–";
+  document.getElementById("stat-announcements").textContent = ann.length;
+  document.getElementById("stat-assignments").textContent   = asg.length;
+  document.getElementById("stat-docs").textContent         = doc.length;
 
   const recent = DATA.updates.slice(0, 6);
   const el = document.getElementById("home-recent");
   el.innerHTML = recent.length
-    ? recent.map(r => cardHTML(r)).join("")
+    ? recent.map(function(r) { return cardHTML(r); }).join("")
     : emptyState("📭", "No updates yet", "Your admin hasn't posted anything yet. Check back soon.");
 }
 
 function renderUpdatesFiltered(elId, categories) {
   const el = document.getElementById(elId);
   if (!el) return;
-  const items = DATA.updates.filter(r => categories.includes(r["Category"]));
+  const items = DATA.updates.filter(function(r) { return categories.indexOf(r["Category"]) !== -1; });
   el.innerHTML = items.length
-    ? items.map(r => cardHTML(r)).join("")
+    ? items.map(function(r) { return cardHTML(r); }).join("")
     : emptyState("📭", "Nothing here yet", "Your admin hasn't posted anything in this category.");
 }
 
@@ -772,77 +771,78 @@ function renderTimetable() {
   const tbody = document.getElementById("timetable-body");
   if (!tbody) return;
   if (!DATA.timetable.length) {
-    tbody.innerHTML = `<tr><td colspan="6">${emptyState("📅","No timetable yet","The admin hasn't added any timetable rows. Create a 'Timetable' sheet tab with the columns shown in the Admin guide.")}</td></tr>`;
+    tbody.innerHTML = "<tr><td colspan=\"6\">" + emptyState("📅","No timetable yet","The admin hasn't added any timetable rows.") + "</td></tr>";
     return;
   }
-  tbody.innerHTML = DATA.timetable.map(r => `
-    <tr>
-      <td><strong>${escHtml(r["Day"]||r["A"]||"")}</strong></td>
-      <td>${escHtml(r["Time"]||r["B"]||"")}</td>
-      <td>${escHtml(r["Subject"]||r["C"]||"")}</td>
-      <td>${escHtml(r["Lecturer"]||r["D"]||"")}</td>
-      <td>${escHtml(r["Room"]||r["Room/Venue"]||r["E"]||"")}</td>
-      <td style="color:var(--muted); font-size:12px;">${escHtml(r["Notes"]||r["F"]||"")}</td>
-    </tr>`).join("");
+  tbody.innerHTML = DATA.timetable.map(function(r) {
+    return "<tr>" +
+      "<td><strong>" + escHtml(r["Day"]||r["A"]||"") + "</strong></td>" +
+      "<td>" + escHtml(r["Time"]||r["B"]||"") + "</td>" +
+      "<td>" + escHtml(r["Subject"]||r["C"]||"") + "</td>" +
+      "<td>" + escHtml(r["Lecturer"]||r["D"]||"") + "</td>" +
+      "<td>" + escHtml(r["Room"]||r["Room/Venue"]||r["E"]||"") + "</td>" +
+      "<td style=\"color:var(--muted); font-size:12px;\">" + escHtml(r["Notes"]||r["F"]||"") + "</td>" +
+      "</tr>";
+  }).join("");
 }
 
 function renderExams() {
   const tbody = document.getElementById("exam-body");
   if (!tbody) return;
   if (!DATA.exams.length) {
-    tbody.innerHTML = `<tr><td colspan="6">${emptyState("📋","No exams scheduled","The admin hasn't added exam entries. Create an 'Exams' sheet tab with the columns shown in the Admin guide.")}</td></tr>`;
+    tbody.innerHTML = "<tr><td colspan=\"6\">" + emptyState("📋","No exams scheduled","The admin hasn't added exam entries.") + "</td></tr>";
     return;
   }
-  tbody.innerHTML = DATA.exams.map(r => `
-    <tr>
-      <td><strong>${escHtml(r["Date"]||r["A"]||"")}</strong></td>
-      <td>${escHtml(r["Subject"]||r["B"]||"")}</td>
-      <td>${escHtml(r["Time"]||r["C"]||"")}</td>
-      <td>${escHtml(r["Venue"]||r["D"]||"")}</td>
-      <td>${escHtml(r["Duration"]||r["E"]||"")}</td>
-      <td style="color:var(--muted); font-size:12px;">${escHtml(r["Notes"]||r["F"]||"")}</td>
-    </tr>`).join("");
+  tbody.innerHTML = DATA.exams.map(function(r) {
+    return "<tr>" +
+      "<td><strong>" + escHtml(r["Date"]||r["A"]||"") + "</strong></td>" +
+      "<td>" + escHtml(r["Subject"]||r["B"]||"") + "</td>" +
+      "<td>" + escHtml(r["Time"]||r["C"]||"") + "</td>" +
+      "<td>" + escHtml(r["Venue"]||r["D"]||"") + "</td>" +
+      "<td>" + escHtml(r["Duration"]||r["E"]||"") + "</td>" +
+      "<td style=\"color:var(--muted); font-size:12px;\">" + escHtml(r["Notes"]||r["F"]||"") + "</td>" +
+      "</tr>";
+  }).join("");
 }
 
 function renderPersonnel() {
   const el = document.getElementById("list-personnel");
   if (!el) return;
   if (!DATA.personnel.length) {
-    el.innerHTML = emptyState("👥","No personnel yet","The admin hasn't added anyone. Create a 'Personnel' sheet tab.");
+    el.innerHTML = emptyState("👥","No personnel yet","The admin hasn't added anyone.");
     return;
   }
-  el.innerHTML = `<div class="grid3">${DATA.personnel.map(p => {
-    const name  = p["Name"]  || p["A"] || "?";
-    const role  = p["Role"]  || p["B"] || "";
-    const email = p["Email"] || p["C"] || "";
-    const phone = p["Phone"] || p["D"] || "";
-    const initials = name.split(" ").map(n=>n[0]||"").join("").slice(0,2).toUpperCase();
-    return `
-      <div class="person-card">
-        <div class="person-avatar">${initials}</div>
-        <div class="person-name">${escHtml(name)}</div>
-        <div class="person-role">${escHtml(role)}</div>
-        ${email ? `<div class="person-email"><a href="mailto:${escHtml(email)}" style="color:var(--primary);">${escHtml(email)}</a></div>` : ""}
-        ${phone ? `<div style="font-size:12px; color:var(--muted); margin-top:3px;">${escHtml(phone)}</div>` : ""}
-      </div>`;
-  }).join("")}</div>`;
+  el.innerHTML = "<div class=\"grid3\">" + DATA.personnel.map(function(p) {
+    const name    = p["Name"]  || p["A"] || "?";
+    const role    = p["Role"]  || p["B"] || "";
+    const email   = p["Email"] || p["C"] || "";
+    const phone   = p["Phone"] || p["D"] || "";
+    const initials = name.split(" ").map(function(n) { return n[0]||""; }).join("").slice(0,2).toUpperCase();
+    return "<div class=\"person-card\">" +
+      "<div class=\"person-avatar\">" + initials + "</div>" +
+      "<div class=\"person-name\">" + escHtml(name) + "</div>" +
+      "<div class=\"person-role\">" + escHtml(role) + "</div>" +
+      (email ? "<div class=\"person-email\"><a href=\"mailto:" + escHtml(email) + "\" style=\"color:var(--primary);\">" + escHtml(email) + "</a></div>" : "") +
+      (phone ? "<div style=\"font-size:12px; color:var(--muted); margin-top:3px;\">" + escHtml(phone) + "</div>" : "") +
+      "</div>";
+  }).join("") + "</div>";
 }
 
 function renderGallery() {
   const el = document.getElementById("list-gallery");
   if (!el) return;
-  const items = DATA.updates.filter(r => r["Category"] === "Gallery");
+  const items = DATA.updates.filter(function(r) { return r["Category"] === "Gallery"; });
   if (!items.length) {
     el.innerHTML = emptyState("🖼️","No photos yet","The admin can add Gallery entries via the Admin Updates sheet.");
     return;
   }
-  el.innerHTML = `<div class="gallery-grid">${items.map(r => {
+  el.innerHTML = "<div class=\"gallery-grid\">" + items.map(function(r) {
     const link  = r["Link (optional)"] || r["Link"] || "";
     const title = r["Title"] || "Photo";
     return link
-      ? `<a class="gallery-item" href="${escHtml(link)}" target="_blank" title="${escHtml(title)}">🖼️</a>`
-      : `<div class="gallery-item" title="${escHtml(title)}"><span>${escHtml(title)}</span></div>`;
-  }).join("")}</div>`;
+      ? "<a class=\"gallery-item\" href=\"" + escHtml(link) + "\" target=\"_blank\" title=\"" + escHtml(title) + "\">🖼️</a>"
+      : "<div class=\"gallery-item\" title=\"" + escHtml(title) + "\"><span>" + escHtml(title) + "</span></div>";
+  }).join("") + "</div>";
 }
 
 function renderReg() {
@@ -859,15 +859,14 @@ function renderReg() {
 }
 
 function updateBadges() {
-  const ann = DATA.updates.filter(r => ["Announcement","Other"].includes(r["Category"]));
-  const asg = DATA.updates.filter(r => r["Category"] === "Assignment");
-
-  const setBadge = (id, count) => {
+  const ann = DATA.updates.filter(function(r) { return r["Category"] === "Announcement" || r["Category"] === "Other"; });
+  const asg = DATA.updates.filter(function(r) { return r["Category"] === "Assignment"; });
+  function setBadge(id, count) {
     const el = document.getElementById(id);
     if (!el) return;
     if (count > 0) { el.textContent = count; el.style.display = "inline-block"; }
     else el.style.display = "none";
-  };
+  }
   setBadge("cnt-announcements", ann.length);
   setBadge("cnt-assignments", asg.length);
 }
@@ -883,13 +882,13 @@ function checkAdmin() {
   const msg = document.getElementById("admin-login-msg");
   if (pwd === CFG.ADMIN_PASSWORD) {
     adminLoggedIn = true;
-    document.getElementById("admin-gate").style.display = "none";
+    document.getElementById("admin-gate").style.display      = "none";
     document.getElementById("admin-dashboard").style.display = "block";
     document.getElementById("set-classname").value = CFG.CLASS_NAME;
     document.getElementById("set-regurl").value    = CFG.REG_FORM_URL;
     document.getElementById("cfg-sheetid").value   = CFG.SHEET_ID !== "YOUR_SPREADSHEET_ID_HERE" ? CFG.SHEET_ID : "";
   } else {
-    msg.innerHTML = `<div class="alert alert-error">❌ Wrong password.</div>`;
+    msg.innerHTML = "<div class=\"alert alert-error\">❌ Wrong password.</div>";
   }
 }
 
@@ -912,13 +911,13 @@ function applySheetId() {
 function saveSettings() {
   const cn = document.getElementById("set-classname").value.trim();
   const ru = document.getElementById("set-regurl").value.trim();
-  if (cn) CFG.CLASS_NAME   = cn;
-  if (ru !== undefined) CFG.REG_FORM_URL = ru;
+  if (cn) CFG.CLASS_NAME  = cn;
+  CFG.REG_FORM_URL = ru;
   persistSave();
-  document.getElementById("nav-logo").textContent = "🎓 " + CFG.CLASS_NAME;
+  document.getElementById("nav-logo").textContent   = "🎓 " + CFG.CLASS_NAME;
   document.getElementById("home-title").textContent = "Welcome to " + CFG.CLASS_NAME + " 🎓";
-  document.getElementById("settings-msg").innerHTML = `<div class="alert alert-success">✅ Settings saved!</div>`;
-  setTimeout(() => { document.getElementById("settings-msg").innerHTML = ""; }, 3000);
+  document.getElementById("settings-msg").innerHTML = "<div class=\"alert alert-success\">✅ Settings saved!</div>";
+  setTimeout(function() { document.getElementById("settings-msg").innerHTML = ""; }, 3000);
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -932,7 +931,7 @@ function escHtml(str) {
 }
 
 function emptyState(icon, title, msg) {
-  return `<div class="empty"><div class="empty-icon">${icon}</div><strong>${title}</strong><br><span style="font-size:13px;">${msg}</span></div>`;
+  return "<div class=\"empty\"><div class=\"empty-icon\">" + icon + "</div><strong>" + title + "</strong><br><span style=\"font-size:13px;\">" + msg + "</span></div>";
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -945,9 +944,8 @@ if (CFG.REG_FORM_URL) document.getElementById("reg-link").href = CFG.REG_FORM_UR
 
 loadAllData();
 
-// Auto-refresh
 if (CFG.REFRESH_INTERVAL > 0) {
-  setInterval(() => loadAllData(), CFG.REFRESH_INTERVAL * 1000);
+  setInterval(function() { loadAllData(); }, CFG.REFRESH_INTERVAL * 1000);
 }
 </script>
 </body>
