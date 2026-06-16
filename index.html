@@ -575,7 +575,8 @@ function persistSave() {
 
 // ── Build Google Sheets JSON URL ─────────────────────────
 function sheetUrl(sheetName) {
-  return `https://docs.google.com/spreadsheets/d/${CFG.SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}`;
+  const bust = Date.now();
+  return `https://docs.google.com/spreadsheets/d/${CFG.SHEET_ID}/gviz/tq?tqx=out:json&sheet=${encodeURIComponent(sheetName)}&_=${bust}`;
 }
 
 // ── Parse the gviz JSON response ────────────────────────
