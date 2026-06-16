@@ -643,9 +643,7 @@ async function loadAllData(showFeedback) {
       const memberJson = memberText.replace(/^[^\(]+\(/, "").replace(/\);\s*$/, "");
       const memberObj  = JSON.parse(memberJson);
       // Subtract 1 for the header row if parsedNumHeaders=0
-      const rawCount = (memberObj.table && memberObj.table.rows) ? memberObj.table.rows.length : 0;
-      const parsed   = memberObj.table ? (memberObj.table.parsedNumHeaders || 0) : 0;
-      DATA.members   = parsed === 0 && rawCount > 0 ? rawCount - 1 : rawCount;
+      DATA.members = (memberObj.table && memberObj.table.rows) ? memberObj.table.rows.length : 0;
     } catch(_) { DATA.members = 0; }
 
     renderCurrentPage();
